@@ -128,6 +128,7 @@ def plasma_distribution_morphology_array(
     quad_abs_tol: float = 1e-5,
     # upper_limit_delta: float = 1e-6,
     pbar: bool = True):
+
     # Generate density distribution
     # Solve for a 2D plane
 
@@ -229,9 +230,115 @@ def plasma_distribution_morphology_array(
 
 
 
-    return Xlam, Ylam, Rlam, ne_morph, t1, t2, t3
+    return Xlam, Ylam, Rlam, ne_morph, t1, t2, t3, quad_abs_tol
 
+
+# Sample values to test
+theta_sample = 1  # radians
+r_sample = np.array([0.001, 0.01, 0.1, 1.0, 5.0, 10.0]) #Rlam
+theta_grid = np.full_like(r_sample, theta_sample)
+
+_, _, Rlam, ne_morph, *_ = plasma_distribution_morphology_array(
+    r_sample,
+    theta_grid,
+    pbar=False,
+    quad_abs_tol=1e-5
+)
+
+print("Sample Rlam and ne_morph values:")
+for r_val, ne_val in zip(Rlam, ne_morph):
+    print("Rlam:", r_val, "ne_morph:", ne_val)
+
+### Solve r from ne_morph and theta ###
+
+# """
+# This is a solver that uses root finder to find r, 
+# such that theta and ne_morph are known. 
+# Note that we are not directly finding the root of ne_morph. 
+# Instead, we are finding the difference between the ne_morph with
+# trial r and user input ne_morph. If the difference is 0,
+# trial r gives the target ne_morph.
+
+# Returns:
+# - best_r: r found by the root finder (based on user input theta and ne_morph)
+# - best_ne_morph: ne_morph evaluated at best_r
+# - error: best_ne_morph - input_ne_morph
+
+# DISCLAIMER: r here is actually Rlam - in mean-free-path units.
+# """
+
+
+from scipy.optimize import root_scalar # solves one-dimensional equations
+
+
+def solve_r(
+        theta,
+        input_ne_morph,
+        r_min = 0.001, # to be specified later
+        r_max = 10.0, # to be specified later
+        quad_abs_tol = 1e-5,
+        xtol = 1e-6 # root finder tolerance
+): 
     
+    def ne_morph_at_r(
+            r # solver provides trial r
+    ):
+        _, _, Rlam, ne_morph, *_ = plasma_distribution_morphology_array( 
+            np.array([r]),
+            np.array([theta]), 
+            pbar = True, 
+            quad_abs_tol=quad_abs_tol
+    )
+        
+        return float(ne_morph[0])
+
+    def objective(r):
+        return ne_morph_at_r(r) - input_ne_morph
+    
+    f_min = objective(r_min) # ne_morph difference
+    f_max = objective(r_max)
+
+    if f_min == 0:
+        best_r = r_min
+    elif f_max == 0:
+        best_r = r_max
+    elif f_min * f_max > 0: # checking bounds
+        raise ValueError(
+            "Root is not bracketed. Values at r_min and r_max do not have opposite signs. Try changing r_min and/or r_max."
+        )
+    else:
+        result = root_scalar( # actual root finder function from scipy
+            objective,
+            bracket = [r_min, r_max],
+            method = "brentq",
+            xtol = xtol
+        )
+
+        if not result.converged:
+            raise RuntimeError("Root finder did not converge.")
+        
+        best_r = result.root
+
+    best_ne_morph = ne_morph_at_r(best_r)
+    error = best_ne_morph - input_ne_morph
+
+    return best_r, best_ne_morph, error
+
+
+theta = float(input("Theta? [rad]"))
+input_ne_morph = float(input("Target ne_morph?"))
+
+best_r, best_ne_morph, error = solve_r(
+    theta = theta,
+    input_ne_morph = input_ne_morph,
+    r_min = 0.001, # to be specified later
+    r_max = 10.0, # to be specified later
+    quad_abs_tol = 1e-5
+)
+
+print("best r (in mean-free-path units, Rlam):", best_r)
+print("best ne_morph:", best_ne_morph)
+print("percent error:", error)
 
 
 
